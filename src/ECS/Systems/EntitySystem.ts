@@ -3,7 +3,7 @@ import { Core } from '../../Core';
 import { Matcher } from '../Utils/Matcher';
 import { PerformanceMonitor } from '../../Utils/PerformanceMonitor';
 import type { Scene } from '../Scene';
-import type { ISystemBase } from '../../types';
+import type { ISystemBase } from '../../Types';
 
 /**
  * 实体系统的基类
@@ -77,6 +77,7 @@ export abstract class EntitySystem implements ISystemBase {
     constructor(matcher?: Matcher) {
         this._matcher = matcher ? matcher : Matcher.empty();
         this._systemName = this.constructor.name;
+        this.initialize();
     }
 
     private _scene!: Scene;
@@ -114,17 +115,10 @@ export abstract class EntitySystem implements ISystemBase {
     /**
      * 系统初始化
      * 
-     * 在系统创建时调用，自动检查场景中已存在的实体是否匹配此系统。
-     * 子类可以重写此方法进行额外的初始化操作。
+     * 在系统创建时调用，子类可以重写此方法进行初始化操作。
      */
     public initialize(): void {
-        if (this.scene?.entities?.buffer) {
-            for (const entity of this.scene.entities.buffer) {
-                this.onChanged(entity);
-            }
-        }
-        
-        // 子类可以重写此方法进行额外初始化
+        // 子类可以重写此方法
     }
 
     /**

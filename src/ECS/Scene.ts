@@ -94,7 +94,7 @@ export class Scene {
      */
     constructor() {
         this.entities = new EntityList(this);
-        this.entityProcessors = new EntityProcessorList();
+        this.entityProcessors = new EntityProcessorList(this); // Pass scene instance
         this.identifierPool = new IdentifierPool();
         this.componentStorageManager = new ComponentStorageManager();
         this.querySystem = new QuerySystem();
@@ -370,40 +370,17 @@ export class Scene {
      * @param processor 要删除的处理器
      */
     public removeEntityProcessor(processor: EntitySystem) {
-        this.entityProcessors.remove(processor); // Actual removal from list
+        const wasRemoved = this.entityProcessors.remove(processor); // Actual removal from list
 
-        // If HMR is enabled, also unregister this system instance
-        if (HotReloadManager.instance.hmrEnabled) {
-            // Find the moduleUrl associated with this processor instance.
-            // This requires iterating the activeSystemInstances map in HotReloadManager.
-            let moduleUrlToRemove: string | null = null;
-            const hmrInstance = HotReloadManager.instance as any; // Cast to access private members if needed, or add a method to HotReloadManager
-
-            // Ideal: HotReloadManager.instance.findModuleUrlForInstance(processor);
-            // Workaround: Iterate the map (assuming activeSystemInstances is accessible or via a getter)
-            // This is a conceptual illustration. Direct access to activeSystemInstances might be bad practice.
-            // Consider adding a method like `getModuleUrlForInstance(instance: EntitySystem): string | undefined` to HotReloadManager.
-            // For now, let's assume we can iterate or have a helper.
-            // This part is tricky because direct map iteration for value is not standard.
-            // A better approach would be for HotReloadManager to expose a method.
-            // For this step, we'll signify the intent.
-            // In a real scenario, HotReloadManager would need a reverse lookup map or a dedicated method.
-
-            // Conceptual: find moduleUrl by instance
-            const managerInstance = HotReloadManager.instance as any; // To access internal map for this example
-            if (managerInstance.activeSystemInstances instanceof Map) {
-                for (const [url, sysInstance] of managerInstance.activeSystemInstances.entries()) {
-                    if (sysInstance === processor) {
-                        moduleUrlToRemove = url;
-                        break;
-                    }
-                }
-            }
-
-            if (moduleUrlToRemove) {
-                HotReloadManager.instance.unregisterSystemInstance(moduleUrlToRemove);
+        // If HMR is enabled and the processor was actually removed from the list,
+        // also unregister this system instance from the HMR manager.
+        if (wasRemoved && HotReloadManager.instance.hmrEnabled) {
+            const moduleUrl = HotReloadManager.instance.findModuleUrlForSystemInstance(processor);
+            if (moduleUrl) {
+                HotReloadManager.instance.unregisterSystemInstance(moduleUrl);
             } else {
-                // console.warn(`[HMR] Scene.removeEntityProcessor: Could not find moduleUrl for manually removed system ${processor.constructor.name}. It might not have been registered or already unregistered.`);
+                // This log is important if a system was manually removed but HMR manager didn't know its URL
+                console.warn(`[HMR] Scene.removeEntityProcessor: Could not find moduleUrl for manually removed system ${processor.constructor.name}. It might not have been registered via HMR-aware addSystem/addEntityProcessor, or was already unregistered.`);
             }
         }
     }

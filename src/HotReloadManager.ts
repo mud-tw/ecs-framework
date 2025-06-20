@@ -95,6 +95,22 @@ export class HotReloadManager {
     }
 
     /**
+     * Enables Hot Module Replacement functionality.
+     */
+    public enable(): void {
+        this.isEnabled = true;
+        console.log('[HMR] Hot Reloading ENABLED.');
+    }
+
+    /**
+     * Disables Hot Module Replacement functionality.
+     */
+    public disable(): void {
+        this.isEnabled = false;
+        console.log('[HMR] Hot Reloading DISABLED.');
+    }
+
+    /**
      * Registers an active system instance with the HotReloadManager.
      * This should be called when a system is added to the scene if HMR is enabled.
      * @param systemInstance The EntitySystem instance to register.
@@ -103,8 +119,11 @@ export class HotReloadManager {
     public registerSystemInstance(systemInstance: EntitySystem, moduleUrl: string): void {
         if (!this.isEnabled) return;
         if (!moduleUrl) {
-            console.warn(`[HMR] Attempted to register system ${systemInstance.constructor.name} without a moduleUrl.`);
+            console.warn(`[HMR] Attempted to register system ${systemInstance.constructor.name} without a moduleUrl. Registration skipped.`);
             return;
+        }
+        if (this.activeSystemInstances.has(moduleUrl)) {
+            console.warn(`[HMR] Overwriting existing system instance for module: ${moduleUrl} (${systemInstance.constructor.name}). Ensure previous instance was disposed.`);
         }
         console.log(`[HMR] Registering system instance ${systemInstance.constructor.name} from ${moduleUrl}`);
         this.activeSystemInstances.set(moduleUrl, systemInstance);
@@ -121,8 +140,8 @@ export class HotReloadManager {
             const systemName = this.activeSystemInstances.get(moduleUrl)?.constructor.name || 'UnknownSystem';
             console.log(`[HMR] Unregistering system instance ${systemName} from ${moduleUrl}`);
             this.activeSystemInstances.delete(moduleUrl);
-        } else {
-            // console.warn(`[HMR] Attempted to unregister non-existent system for moduleUrl: ${moduleUrl}`);
+        } else if (moduleUrl) { // Only warn if moduleUrl was provided but not found
+            console.warn(`[HMR] Attempted to unregister system from ${moduleUrl}, but no instance was found.`);
         }
     }
 
@@ -144,7 +163,7 @@ export class HotReloadManager {
 
         const systemInstance = this.activeSystemInstances.get(moduleUrl);
         if (!systemInstance) {
-            console.warn(`[HMR] System dispose for ${moduleUrl} called, but no registered instance found.`);
+            console.warn(`[HMR] System dispose for ${moduleUrl} called, but no registered active instance found. It might have been already removed or never registered.`);
             return;
         }
 
@@ -166,7 +185,7 @@ export class HotReloadManager {
         this.activeScene.entityProcessors.remove(systemInstance);
         this.unregisterSystemInstance(moduleUrl); // Unregister after successful removal and state saving
 
-        console.log(`[HMR] System ${systemInstance.constructor.name} removed from scene and unregistered.`);
+        console.log(`[HMR] System ${systemInstance.constructor.name} (from ${moduleUrl}) removed from scene and unregistered.`);
     }
 
     /**
@@ -198,32 +217,56 @@ export class HotReloadManager {
             // Assume system constructors are simple or Scene.addEntityProcessor handles complex setup.
             newSystemInstance = new NewSystemClass();
         } catch (e) {
-            console.error(`[HMR] Error instantiating new system ${NewSystemClass.name}:`, e);
+            console.error(`[HMR] Error instantiating new system ${NewSystemClass.name} from module ${moduleUrl}:`, e);
             return;
         }
 
-        const hmrSystemState = hmrData.ecsSystemState as HmrSystemState | undefined;
+        const hmrSystemState = (hmrData.ecsSystemModuleUrl === moduleUrl) ? hmrData.ecsSystemState as HmrSystemState | undefined : undefined;
 
-        if (hmrSystemState && hmrSystemState.state !== undefined && typeof newSystemInstance.onAfterReload === 'function') {
-            try {
-                console.log(`[HMR] Restoring state for ${NewSystemClass.name}:`, hmrSystemState.state);
-                newSystemInstance.onAfterReload(hmrSystemState.state);
-            } catch (e) {
-                console.error(`[HMR] Error in ${NewSystemClass.name}.onAfterReload():`, e);
+
+        if (hmrSystemState && hmrSystemState.state !== undefined) {
+            if (typeof newSystemInstance.onAfterReload === 'function') {
+                try {
+                    console.log(`[HMR] Restoring state for ${NewSystemClass.name} from ${moduleUrl}:`, hmrSystemState.state);
+                    newSystemInstance.onAfterReload(hmrSystemState.state);
+                } catch (e) {
+                    console.error(`[HMR] Error in ${NewSystemClass.name}.onAfterReload() from ${moduleUrl}:`, e);
+                }
+            } else {
+                 console.log(`[HMR] System ${NewSystemClass.name} from ${moduleUrl} has saved state but no onAfterReload method.`);
             }
+        } else {
+            console.log(`[HMR] No previous state found for ${NewSystemClass.name} from ${moduleUrl}, or onAfterReload not implemented. Initializing as new.`);
         }
 
         // Add the new system instance to the scene.
         // The Scene's addEntityProcessor method should handle setting the scene reference
         // and registering the system with the HotReloadManager using the moduleUrl.
-        this.activeScene.addEntityProcessor(newSystemInstance as EntitySystem, moduleUrl);
-        console.log(`[HMR] New system ${NewSystemClass.name} added to scene and (re)loaded.`);
+        this.activeScene.addEntityProcessor(newSystemInstance as EntitySystem, moduleUrl, true /* isHmrAdd */);
+        console.log(`[HMR] New system ${NewSystemClass.name} (from ${moduleUrl}) added to scene and reloaded.`);
 
         // Clean up the HMR data associated with this system
         if (hmrData && hmrData.ecsSystemModuleUrl === moduleUrl) {
             delete hmrData.ecsSystemState;
             delete hmrData.ecsSystemModuleUrl;
         }
+    }
+
+    /**
+     * Finds the module URL for a given system instance.
+     * This is used to identify the module associated with a system instance,
+     * for example, when unregistering a manually removed system.
+     * @param systemInstance The system instance to find the module URL for.
+     * @returns The module URL if found, otherwise undefined.
+     */
+    public findModuleUrlForSystemInstance(systemInstance: EntitySystem): string | undefined {
+        if (!this.isEnabled) return undefined;
+        for (const [url, instance] of this.activeSystemInstances.entries()) {
+            if (instance === systemInstance) {
+                return url;
+            }
+        }
+        return undefined;
     }
 
     // ----------------------------------------------------------------------------------
@@ -251,7 +294,7 @@ export class HotReloadManager {
         };
 
         if (!this.activeScene.entities || !this.activeScene.entities.buffer) {
-            console.warn('[HMR] No entities found in scene to process for component disposal.');
+            console.warn('[HMR] No entities found in scene to process for component disposal for module:', moduleUrl);
             hmrData.ecsComponentState = componentHmrState; // Save empty state
             hmrData.ecsComponentModuleUrl = moduleUrl;
             return;
@@ -277,7 +320,7 @@ export class HotReloadManager {
 
         hmrData.ecsComponentState = componentHmrState;
         hmrData.ecsComponentModuleUrl = moduleUrl;
-        console.log(`[HMR] State for ${componentHmrState.instanceStates.size} instances of ${OldComponentClass.name} saved for HMR.`);
+        console.log(`[HMR] State for ${componentHmrState.instanceStates.size} instances of ${OldComponentClass.name} (from ${moduleUrl}) saved for HMR.`);
     }
 
     /**
@@ -295,8 +338,9 @@ export class HotReloadManager {
 
         console.log(`[HMR] Accepting new component module: ${NewComponentClass.name} from ${moduleUrl}`);
 
+        // Check if the hmrData contains state for *this specific moduleUrl*
         if (!hmrData || hmrData.ecsComponentModuleUrl !== moduleUrl || !hmrData.ecsComponentState) {
-            console.warn(`[HMR] No valid HMR state found for component module ${moduleUrl}. Components will be re-added if logic exists, or re-initialized if entities are processed by systems.`);
+            console.warn(`[HMR] No valid HMR state found for component module ${moduleUrl} (${NewComponentClass.name}). Component instances may not be correctly restored or may require systems to re-process entities.`);
             // Notify systems that entities might have changed structure, even if we can't restore state.
             if (this.activeScene.entityProcessors && typeof this.activeScene.entityProcessors.notifyAllSystemsOfEntityChanges === 'function') {
                 this.activeScene.entityProcessors.notifyAllSystemsOfEntityChanges();
@@ -309,7 +353,7 @@ export class HotReloadManager {
         const instanceStates = componentHmrInfo.instanceStates;
 
         if (!instanceStates || !OldComponentClassRef) {
-            console.error('[HMR] HMR component state is incomplete. Cannot proceed with component update for', NewComponentClass.name);
+            console.error(`[HMR] HMR component state is incomplete for ${NewComponentClass.name} (from ${moduleUrl}). Cannot proceed with component update.`);
             return;
         }
 
@@ -326,7 +370,7 @@ export class HotReloadManager {
                     try {
                         newComponentInstance = new NewComponentClass(); // Assumes default constructor
                     } catch (e) {
-                        console.error(`[HMR] Error instantiating new component ${NewComponentClass.name} for entity ${entityId}:`, e);
+                        console.error(`[HMR] Error instantiating new component ${NewComponentClass.name} for entity ${entityId} (module ${moduleUrl}):`, e);
                         return; // Skip this entity
                     }
 
@@ -339,7 +383,7 @@ export class HotReloadManager {
                         }
                         // If neither, state is applied directly in onAfterReload or by property copy in onAfterReload default
                     } catch (e) {
-                        console.error(`[HMR] Error during state migration for ${NewComponentClass.name} on entity ${entityId}:`, e);
+                        console.error(`[HMR] Error during state migration for ${NewComponentClass.name} on entity ${entityId} (module ${moduleUrl}):`, e);
                     }
 
                     // onAfterReload Hook
@@ -347,20 +391,20 @@ export class HotReloadManager {
                         try {
                             newComponentInstance.onAfterReload(oldState); // Pass oldState, as onAfterReload typically expects the direct output of onBeforeReload
                         } catch (e) {
-                            console.error(`[HMR] Error in ${NewComponentClass.name}.onAfterReload() for entity ${entityId}:`, e);
+                            console.error(`[HMR] Error in ${NewComponentClass.name}.onAfterReload() for entity ${entityId} (module ${moduleUrl}):`, e);
                         }
                     }
 
                     entity.addComponent(newComponentInstance as Component);
                     updatedCount++;
                 } else {
-                    console.warn(`[HMR] Entity with ID ${entityId} not found during component reload for ${NewComponentClass.name}.`);
+                    console.warn(`[HMR] Entity with ID ${entityId} not found during component reload for ${NewComponentClass.name} (module ${moduleUrl}).`);
                 }
             });
         }
 
 
-        console.log(`[HMR] Component ${NewComponentClass.name} reloaded. ${updatedCount} of ${instanceStates.size} instances updated/processed.`);
+        console.log(`[HMR] Component ${NewComponentClass.name} (from ${moduleUrl}) reloaded. ${updatedCount} of ${instanceStates.size} instances updated/processed.`);
 
         delete hmrData.ecsComponentState;
         delete hmrData.ecsComponentModuleUrl;
@@ -369,7 +413,7 @@ export class HotReloadManager {
         if (this.activeScene.entityProcessors && typeof this.activeScene.entityProcessors.notifyAllSystemsOfEntityChanges === 'function') {
             this.activeScene.entityProcessors.notifyAllSystemsOfEntityChanges();
         } else {
-            console.warn('[HMR] Scene.entityProcessors.notifyAllSystemsOfEntityChanges() not found. Systems may not be aware of component changes.');
+            console.warn('[HMR] Scene.entityProcessors.notifyAllSystemsOfEntityChanges() not found. Systems may not be fully aware of HMR component changes.');
         }
     }
 }
