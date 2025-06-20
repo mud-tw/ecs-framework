@@ -152,7 +152,75 @@ export abstract class Component implements IComponent {
      */
     public update(): void {
     }
+
+    /**
+     * 在热模块替换 (HMR) 之前调用。
+     * 派生组件应覆盖此方法以返回需要保留的特定状态。
+     * @returns 组件的当前状态，将传递给 onAfterReload 或 migrateState。
+     */
+    public onBeforeReload(): any {
+        console.log(`[HMR] Component.onBeforeReload called for ${this.constructor.name} on entity ${this.entity?.id}`);
+        // 默认实现：浅拷贝自身可枚举的非函数、非实体、非id属性
+        const ownData: any = {};
+        for (const key in this) {
+            if (Object.prototype.hasOwnProperty.call(this, key) &&
+                key !== 'entity' && key !== 'id' &&
+                key !== '_enabled' && key !== '_updateOrder' && // Exclude known base class private-like properties
+                typeof (this as any)[key] !== 'function') {
+                ownData[key] = (this as any)[key];
+            }
+        }
+        return ownData;
+    }
+
+    /**
+     * 在热模块替换 (HMR) 之后调用。
+     * 派生组件应覆盖此方法以从先前保留的状态恢复其内部状态。
+     * @param previousState 先前由 onBeforeReload 返回的状态。
+     */
+    public onAfterReload(previousState: any): void {
+        console.log(`[HMR] Component.onAfterReload called for ${this.constructor.name} on entity ${this.entity?.id}. PrevState:`, previousState);
+        // 默认实现：尝试将 previousState 中的属性应用到新实例上对应的属性
+        if (previousState) {
+            for (const key in previousState) {
+                if (Object.prototype.hasOwnProperty.call(this, key) &&
+                    key !== 'id' && key !== 'entity' &&
+                    typeof (this as any)[key] !== 'function') { // 确保不在原型链上且不是方法
+                    (this as any)[key] = previousState[key];
+                }
+            }
+        }
+    }
+
+    /**
+     * 可选的静态方法，用于在组件类结构发生重大变化时迁移状态。
+     * 当 onAfterReload 不足以处理状态恢复时（例如，属性重命名、类型更改），
+     * 派生组件可以覆盖此方法以实现自定义迁移逻辑。
+     * @param oldState 从旧版本组件的 onBeforeReload 返回的状态。
+     * @param newInstance 新版本组件的实例。
+     */
+    public static migrateState(oldState: any, newInstance: Component): void {
+        console.log(`[HMR] Component.migrateState called for ${newInstance.constructor.name}. OldState:`, oldState);
+        // 默认迁移：尝试将 oldState 中的属性复制到 newInstance 中对应的属性
+        // 这与 onAfterReload 中的默认逻辑类似，但作为静态方法提供，
+        // 允许在无法简单地将旧状态直接应用到新实例时进行更复杂的转换。
+        if (oldState && typeof oldState === 'object' && newInstance) {
+            for (const key in oldState) {
+                // 检查 newInstance 是否确实具有该属性（不是来自原型）
+                if (Object.prototype.hasOwnProperty.call(newInstance, key) &&
+                    key !== 'id' && key !== 'entity' &&
+                    typeof (newInstance as any)[key] !== 'function') {
+                    (newInstance as any)[key] = oldState[key];
+                } else if (!Object.prototype.hasOwnProperty.call(newInstance, key) &&
+                           key !== 'id' && key !== 'entity' &&
+                           (newInstance as any)[key] === undefined) {
+                    // 属性存在于旧状态但不存在于新实例上，可以考虑记录警告
+                    // console.warn(`[HMR] Property ${key} existed in old state for ${newInstance.constructor.name} but not in new instance.`);
+                }
+            }
+        }
+    }
 }
 
 // 避免循环引用，在文件末尾导入Entity
-import type { Entity } from './Entity'; 
+import type { Entity } from './Entity';

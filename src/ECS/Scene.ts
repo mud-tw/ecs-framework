@@ -6,6 +6,7 @@ import { EntitySystem } from './Systems/EntitySystem';
 import { ComponentStorageManager } from './Core/ComponentStorage';
 import { QuerySystem } from './Core/QuerySystem';
 import { TypeSafeEventSystem, GlobalEventSystem } from './Core/EventSystem';
+import { HotReloadManager } from '../HotReloadManager';
 
 /**
  * 游戏场景类
@@ -320,21 +321,48 @@ export class Scene {
     /**
      * 在场景中添加一个EntitySystem处理器
      * @param processor 处理器
+     * @param moduleUrl 可选的模块 URL，用于 HMR 注册
+     * @param isHmrAdd 可选标志，指示此添加是否为 HMR 重新加载的一部分
      */
-    public addEntityProcessor(processor: EntitySystem) {
+    public addEntityProcessor(processor: EntitySystem, moduleUrl?: string, isHmrAdd: boolean = false) {
         processor.scene = this;
         this.entityProcessors.add(processor);
 
-        processor.setUpdateOrder(this.entityProcessors.count - 1);
+        // 在 HMR 管理器中注册系统实例（如果 HMR 已启用且提供了 moduleUrl）
+        // isHmrAdd 标志在这里主要用于通知，实际注册逻辑不变。
+        // 如果需要，可以在 HotReloadManager.registerSystemInstance 中使用 isHmrAdd。
+        if (HotReloadManager.instance.hmrEnabled && moduleUrl) {
+            HotReloadManager.instance.registerSystemInstance(processor, moduleUrl);
+        }
+
+        // 如果不是 HMR 添加，或者需要为 HMR 添加的系统设置初始顺序，则设置更新顺序。
+        // HMR 流程中，系统通常会被移除再添加，所以顺序可能需要重新计算或保留。
+        // HotReloadManager.handleSystemAccept 最终调用此方法。
+        // 确保新（或重新加载的）系统获得正确的更新顺序。
+        if (!isHmrAdd) { //或者总是设置，让EntityProcessorList处理排序
+            processor.setUpdateOrder(this.entityProcessors.count - 1);
+        } else {
+            // For HMR, the order might be preserved or recalculated by EntityProcessorList.
+            // For now, we can explicitly set it, or rely on a sort elsewhere.
+            // If systems store their original updateOrder, it could be restored in onAfterReload
+            // and then EntityProcessorList.setDirty() called.
+            // Let's assume for now that newly added HMR systems also get appended.
+             processor.setUpdateOrder(this.entityProcessors.count - 1);
+             // Potentially, EntityProcessorList should be dirtied and resorted after HMR add.
+             // this.entityProcessors.setDirty();
+        }
+        // console.log(`[Scene] Added system ${processor.constructor.name}. HMR Add: ${isHmrAdd}. ModuleURL: ${moduleUrl}`);
         return processor;
     }
 
     /**
      * 添加系统到场景（addEntityProcessor的别名）
      * @param system 系统
+     * @param moduleUrl 可选的模块 URL，用于 HMR 注册
+     * @param isHmrAdd 可选标志，指示此添加是否为 HMR 重新加载的一部分
      */
-    public addSystem(system: EntitySystem) {
-        return this.addEntityProcessor(system);
+    public addSystem(system: EntitySystem, moduleUrl?: string, isHmrAdd: boolean = false) {
+        return this.addEntityProcessor(system, moduleUrl, isHmrAdd);
     }
 
     /**
@@ -342,7 +370,42 @@ export class Scene {
      * @param processor 要删除的处理器
      */
     public removeEntityProcessor(processor: EntitySystem) {
-        this.entityProcessors.remove(processor);
+        this.entityProcessors.remove(processor); // Actual removal from list
+
+        // If HMR is enabled, also unregister this system instance
+        if (HotReloadManager.instance.hmrEnabled) {
+            // Find the moduleUrl associated with this processor instance.
+            // This requires iterating the activeSystemInstances map in HotReloadManager.
+            let moduleUrlToRemove: string | null = null;
+            const hmrInstance = HotReloadManager.instance as any; // Cast to access private members if needed, or add a method to HotReloadManager
+
+            // Ideal: HotReloadManager.instance.findModuleUrlForInstance(processor);
+            // Workaround: Iterate the map (assuming activeSystemInstances is accessible or via a getter)
+            // This is a conceptual illustration. Direct access to activeSystemInstances might be bad practice.
+            // Consider adding a method like `getModuleUrlForInstance(instance: EntitySystem): string | undefined` to HotReloadManager.
+            // For now, let's assume we can iterate or have a helper.
+            // This part is tricky because direct map iteration for value is not standard.
+            // A better approach would be for HotReloadManager to expose a method.
+            // For this step, we'll signify the intent.
+            // In a real scenario, HotReloadManager would need a reverse lookup map or a dedicated method.
+
+            // Conceptual: find moduleUrl by instance
+            const managerInstance = HotReloadManager.instance as any; // To access internal map for this example
+            if (managerInstance.activeSystemInstances instanceof Map) {
+                for (const [url, sysInstance] of managerInstance.activeSystemInstances.entries()) {
+                    if (sysInstance === processor) {
+                        moduleUrlToRemove = url;
+                        break;
+                    }
+                }
+            }
+
+            if (moduleUrlToRemove) {
+                HotReloadManager.instance.unregisterSystemInstance(moduleUrlToRemove);
+            } else {
+                // console.warn(`[HMR] Scene.removeEntityProcessor: Could not find moduleUrl for manually removed system ${processor.constructor.name}. It might not have been registered or already unregistered.`);
+            }
+        }
     }
 
     /**

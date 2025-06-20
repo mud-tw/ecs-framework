@@ -315,5 +315,29 @@ export abstract class EntitySystem implements ISystemBase {
         
         return `${this._systemName}[${entityCount} entities]${perfInfo}`;
     }
+
+    /**
+     * 在热模块替换 (HMR) 之前调用。
+     *
+     * 子系统可以覆盖此方法以返回在重新加载之前应保留的状态。
+     *
+     * @returns 要保留的状态，默认为 null。
+     */
+    public onBeforeReload(): any {
+        console.log('[HMR] EntitySystem.onBeforeReload called for', this.constructor.name);
+        return null;
+    }
+
+    /**
+     * 在热模块替换 (HMR) 之后调用。
+     *
+     * 子系统可以覆盖此方法以使用先前保留的状态恢复其内部状态。
+     *
+     * @param previousState 先前由 onBeforeReload 返回的状态。
+     */
+    public onAfterReload(previousState: any): void {
+        console.log('[HMR] EntitySystem.onAfterReload called for', this.constructor.name, 'with state:', previousState);
+        // 子类可以实现此方法来恢复状态
+    }
 }
 
