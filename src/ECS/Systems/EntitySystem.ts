@@ -3,7 +3,7 @@ import { Core } from '../../Core';
 import { Matcher } from '../Utils/Matcher';
 import { PerformanceMonitor } from '../../Utils/PerformanceMonitor';
 import type { Scene } from '../Scene';
-import type { ISystemBase } from '../../types';
+import type { ISystemBase } from '../../Types';
 
 /**
  * 实体系统的基类
@@ -77,6 +77,7 @@ export abstract class EntitySystem implements ISystemBase {
     constructor(matcher?: Matcher) {
         this._matcher = matcher ? matcher : Matcher.empty();
         this._systemName = this.constructor.name;
+        this.initialize();
     }
 
     private _scene!: Scene;
@@ -114,17 +115,10 @@ export abstract class EntitySystem implements ISystemBase {
     /**
      * 系统初始化
      * 
-     * 在系统创建时调用，自动检查场景中已存在的实体是否匹配此系统。
-     * 子类可以重写此方法进行额外的初始化操作。
+     * 在系统创建时调用，子类可以重写此方法进行初始化操作。
      */
     public initialize(): void {
-        if (this.scene?.entities?.buffer) {
-            for (const entity of this.scene.entities.buffer) {
-                this.onChanged(entity);
-            }
-        }
-        
-        // 子类可以重写此方法进行额外初始化
+        // 子类可以重写此方法
     }
 
     /**
@@ -320,6 +314,30 @@ export abstract class EntitySystem implements ISystemBase {
         const perfInfo = perfData ? ` (${perfData.executionTime.toFixed(2)}ms)` : '';
         
         return `${this._systemName}[${entityCount} entities]${perfInfo}`;
+    }
+
+    /**
+     * 在热模块替换 (HMR) 之前调用。
+     *
+     * 子系统可以覆盖此方法以返回在重新加载之前应保留的状态。
+     *
+     * @returns 要保留的状态，默认为 null。
+     */
+    public onBeforeReload(): any {
+        console.log('[HMR] EntitySystem.onBeforeReload called for', this.constructor.name);
+        return null;
+    }
+
+    /**
+     * 在热模块替换 (HMR) 之后调用。
+     *
+     * 子系统可以覆盖此方法以使用先前保留的状态恢复其内部状态。
+     *
+     * @param previousState 先前由 onBeforeReload 返回的状态。
+     */
+    public onAfterReload(previousState: any): void {
+        console.log('[HMR] EntitySystem.onAfterReload called for', this.constructor.name, 'with state:', previousState);
+        // 子类可以实现此方法来恢复状态
     }
 }
 

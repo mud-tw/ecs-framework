@@ -6,6 +6,7 @@ import { EntitySystem } from './Systems/EntitySystem';
 import { ComponentStorageManager } from './Core/ComponentStorage';
 import { QuerySystem } from './Core/QuerySystem';
 import { TypeSafeEventSystem, GlobalEventSystem } from './Core/EventSystem';
+import { HotReloadManager } from '../HotReloadManager';
 
 /**
  * 游戏场景类
@@ -93,7 +94,7 @@ export class Scene {
      */
     constructor() {
         this.entities = new EntityList(this);
-        this.entityProcessors = new EntityProcessorList();
+        this.entityProcessors = new EntityProcessorList(this); // Pass scene instance
         this.identifierPool = new IdentifierPool();
         this.componentStorageManager = new ComponentStorageManager();
         this.querySystem = new QuerySystem();
@@ -320,21 +321,48 @@ export class Scene {
     /**
      * 在场景中添加一个EntitySystem处理器
      * @param processor 处理器
+     * @param moduleUrl 可选的模块 URL，用于 HMR 注册
+     * @param isHmrAdd 可选标志，指示此添加是否为 HMR 重新加载的一部分
      */
-    public addEntityProcessor(processor: EntitySystem) {
+    public addEntityProcessor(processor: EntitySystem, moduleUrl?: string, isHmrAdd: boolean = false) {
         processor.scene = this;
         this.entityProcessors.add(processor);
 
-        processor.setUpdateOrder(this.entityProcessors.count - 1);
+        // 在 HMR 管理器中注册系统实例（如果 HMR 已启用且提供了 moduleUrl）
+        // isHmrAdd 标志在这里主要用于通知，实际注册逻辑不变。
+        // 如果需要，可以在 HotReloadManager.registerSystemInstance 中使用 isHmrAdd。
+        if (HotReloadManager.instance.hmrEnabled && moduleUrl) {
+            HotReloadManager.instance.registerSystemInstance(processor, moduleUrl);
+        }
+
+        // 如果不是 HMR 添加，或者需要为 HMR 添加的系统设置初始顺序，则设置更新顺序。
+        // HMR 流程中，系统通常会被移除再添加，所以顺序可能需要重新计算或保留。
+        // HotReloadManager.handleSystemAccept 最终调用此方法。
+        // 确保新（或重新加载的）系统获得正确的更新顺序。
+        if (!isHmrAdd) { //或者总是设置，让EntityProcessorList处理排序
+            processor.setUpdateOrder(this.entityProcessors.count - 1);
+        } else {
+            // For HMR, the order might be preserved or recalculated by EntityProcessorList.
+            // For now, we can explicitly set it, or rely on a sort elsewhere.
+            // If systems store their original updateOrder, it could be restored in onAfterReload
+            // and then EntityProcessorList.setDirty() called.
+            // Let's assume for now that newly added HMR systems also get appended.
+             processor.setUpdateOrder(this.entityProcessors.count - 1);
+             // Potentially, EntityProcessorList should be dirtied and resorted after HMR add.
+             // this.entityProcessors.setDirty();
+        }
+        // console.log(`[Scene] Added system ${processor.constructor.name}. HMR Add: ${isHmrAdd}. ModuleURL: ${moduleUrl}`);
         return processor;
     }
 
     /**
      * 添加系统到场景（addEntityProcessor的别名）
      * @param system 系统
+     * @param moduleUrl 可选的模块 URL，用于 HMR 注册
+     * @param isHmrAdd 可选标志，指示此添加是否为 HMR 重新加载的一部分
      */
-    public addSystem(system: EntitySystem) {
-        return this.addEntityProcessor(system);
+    public addSystem(system: EntitySystem, moduleUrl?: string, isHmrAdd: boolean = false) {
+        return this.addEntityProcessor(system, moduleUrl, isHmrAdd);
     }
 
     /**
@@ -342,7 +370,19 @@ export class Scene {
      * @param processor 要删除的处理器
      */
     public removeEntityProcessor(processor: EntitySystem) {
-        this.entityProcessors.remove(processor);
+        const wasRemoved = this.entityProcessors.remove(processor); // Actual removal from list
+
+        // If HMR is enabled and the processor was actually removed from the list,
+        // also unregister this system instance from the HMR manager.
+        if (wasRemoved && HotReloadManager.instance.hmrEnabled) {
+            const moduleUrl = HotReloadManager.instance.findModuleUrlForSystemInstance(processor);
+            if (moduleUrl) {
+                HotReloadManager.instance.unregisterSystemInstance(moduleUrl);
+            } else {
+                // This log is important if a system was manually removed but HMR manager didn't know its URL
+                console.warn(`[HMR] Scene.removeEntityProcessor: Could not find moduleUrl for manually removed system ${processor.constructor.name}. It might not have been registered via HMR-aware addSystem/addEntityProcessor, or was already unregistered.`);
+            }
+        }
     }
 
     /**
